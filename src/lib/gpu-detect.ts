@@ -6,6 +6,7 @@ export interface GPUCapabilities {
   maxBufferSize: number;
   maxBufferSizeMB: number;
   recommendedTier: GPUTier;
+  supportsF16: boolean;
 }
 
 export async function detectGPUCapabilities(): Promise<GPUCapabilities> {
@@ -16,6 +17,7 @@ export async function detectGPUCapabilities(): Promise<GPUCapabilities> {
       maxBufferSize: 0,
       maxBufferSizeMB: 0,
       recommendedTier: 'cpu',
+      supportsF16: false,
     };
   }
 
@@ -25,9 +27,15 @@ export async function detectGPUCapabilities(): Promise<GPUCapabilities> {
       throw new Error('No appropriate GPU adapter found.');
     }
 
-    const info = (adapter as any).info ? (adapter as any).info : (adapter as any).requestAdapterInfo ? await (adapter as any).requestAdapterInfo() : {};
+    const info = (adapter as any).info
+      ? (adapter as any).info
+      : (adapter as any).requestAdapterInfo
+        ? await (adapter as any).requestAdapterInfo()
+        : {};
+
     const maxBufferSize = adapter.limits.maxStorageBufferBindingSize;
     const maxBufferSizeMB = Math.round(maxBufferSize / (1024 * 1024));
+    const supportsF16 = adapter.features.has('shader-f16');
 
     let tier: GPUTier = 'low';
     if (maxBufferSizeMB >= 4096) {
@@ -44,6 +52,7 @@ export async function detectGPUCapabilities(): Promise<GPUCapabilities> {
       maxBufferSize,
       maxBufferSizeMB,
       recommendedTier: tier,
+      supportsF16,
     };
   } catch (err) {
     console.error('Failed to request WebGPU adapter:', err);
@@ -53,6 +62,7 @@ export async function detectGPUCapabilities(): Promise<GPUCapabilities> {
       maxBufferSize: 0,
       maxBufferSizeMB: 0,
       recommendedTier: 'cpu',
+      supportsF16: false,
     };
   }
 }

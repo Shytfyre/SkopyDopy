@@ -2,6 +2,7 @@ import { GPUTier, GPUCapabilities } from './gpu-detect';
 
 export interface ModelConfig {
   id: string;
+  fallbackId?: string;
   displayName: string;
   params: string;
   runtime: 'webllm' | 'transformers';
@@ -13,6 +14,7 @@ export interface ModelConfig {
 export const TEXT_MODELS: ModelConfig[] = [
   {
     id: 'Qwen2.5-7B-Instruct-q4f16_1-MLC',
+    fallbackId: 'Qwen2.5-7B-Instruct-q4f32_1-MLC',
     displayName: 'Qwen2.5 7B',
     params: '7B',
     runtime: 'webllm',
@@ -22,24 +24,27 @@ export const TEXT_MODELS: ModelConfig[] = [
   },
   {
     id: 'Phi-3.5-mini-instruct-q4f16_1-MLC',
+    fallbackId: 'Phi-3.5-mini-instruct-q4f32_1-MLC',
     displayName: 'Phi-3.5 Mini',
     params: '3.8B',
     runtime: 'webllm',
     tier: 'high',
     estimatedVRAM: '2.5GB+',
-    description: 'Microsoft\'s model tuned for reasoning tasks. Great for powerful laptops.',
+    description: "Microsoft's model tuned for reasoning tasks. Great for powerful laptops.",
   },
   {
     id: 'gemma-2-2b-it-q4f16_1-MLC',
+    fallbackId: 'gemma-2-2b-it-q4f32_1-MLC',
     displayName: 'Gemma-2 2B',
     params: '2B',
     runtime: 'webllm',
     tier: 'medium',
     estimatedVRAM: '1.5GB+',
-    description: 'Google\'s lightweight workhorse. Excellent balance of speed and quality.',
+    description: "Google's lightweight workhorse. Excellent balance of speed and quality.",
   },
   {
     id: 'Qwen2.5-0.5B-Instruct-q4f16_1-MLC',
+    fallbackId: 'Qwen2.5-0.5B-Instruct-q4f32_1-MLC',
     displayName: 'Qwen2.5 0.5B',
     params: '0.5B',
     runtime: 'webllm',
@@ -55,12 +60,12 @@ export const TEXT_MODELS: ModelConfig[] = [
     tier: 'cpu',
     estimatedVRAM: 'CPU RAM',
     description: 'Runs on CPU. Much slower, but works without WebGPU.',
-  }
+  },
 ];
 
 export const VISION_MODELS = {
   default: {
-    id: 'Xenova/SmolVLM-256M-Instruct', // Using Xenova's compiled versions for transformers.js
+    id: 'Xenova/SmolVLM-256M-Instruct',
     displayName: 'SmolVLM 256M',
     description: 'Fast, lightweight image understanding.',
   },
@@ -68,7 +73,7 @@ export const VISION_MODELS = {
     id: 'Xenova/Florence-2-base',
     displayName: 'Florence-2 Base',
     description: 'Better for complex OCR and document scanning.',
-  }
+  },
 };
 
 export const EMBEDDING_MODEL = {
@@ -81,16 +86,23 @@ const tierRank: Record<GPUTier, number> = {
   low: 1,
   medium: 2,
   high: 3,
-  ultra: 4
+  ultra: 4,
 };
+
+// Returns the f16 model id if the GPU supports it, otherwise the f32 fallback.
+export function resolveModelId(model: ModelConfig, capabilities: GPUCapabilities): string {
+  if (!capabilities.supportsF16 && model.fallbackId) {
+    return model.fallbackId;
+  }
+  return model.id;
+}
 
 export function getRecommendedModel(capabilities: GPUCapabilities): ModelConfig {
   const targetTier = capabilities.recommendedTier;
   const targetRank = tierRank[targetTier];
-  
-  // Find the highest ranking model that is <= our target rank
-  let recommended = TEXT_MODELS.find(m => tierRank[m.tier] <= targetRank);
-  return recommended || TEXT_MODELS[TEXT_MODELS.length - 1]; // fallback to CPU
+
+  const recommended = TEXT_MODELS.find(m => tierRank[m.tier] <= targetRank);
+  return recommended || TEXT_MODELS[TEXT_MODELS.length - 1];
 }
 
 export function getAvailableModels(capabilities: GPUCapabilities): ModelConfig[] {

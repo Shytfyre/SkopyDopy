@@ -9,8 +9,9 @@ export type DocType = 'pdf' | 'image' | 'docx' | 'xlsx' | 'csv' | 'text' | 'mark
 export async function parseDocument(file: File): Promise<Omit<DbDocument, 'sizeBytes' | 'uploadedAt'> & { fileType: DocType, blob?: Blob }> {
   const arrayBuffer = await file.arrayBuffer();
   const fileType = detectFileType(file);
+  console.log('[Parser] name:', file.name, '| mime:', file.type, '| detected:', fileType);
   const id = uuidv4();
-  
+
   let extractedText = '';
 
   switch (fileType) {
@@ -21,12 +22,12 @@ export async function parseDocument(file: File): Promise<Omit<DbDocument, 'sizeB
         extractedText = "[Note: This PDF appears to be a scanned image without selectable text. Consider uploading the pages as images to use the Vision AI for analysis.]";
       }
       break;
-      
+
     case 'docx':
       const result = await mammoth.extractRawText({ arrayBuffer });
       extractedText = result.value;
       break;
-      
+
     case 'xlsx':
     case 'csv':
       const workbook = XLSX.read(arrayBuffer, { type: 'array' });
@@ -35,17 +36,18 @@ export async function parseDocument(file: File): Promise<Omit<DbDocument, 'sizeB
         return `--- Sheet: ${sheetName} ---\n` + XLSX.utils.sheet_to_csv(sheet);
       }).join('\n\n');
       break;
-      
+
     case 'text':
     case 'markdown':
-      extractedText = await file.text();
+      extractedText = new TextDecoder().decode(arrayBuffer);
+      console.log('[Parser] extracted length:', extractedText.length);
       break;
-      
+
     case 'image':
       // Text extraction happens on-demand via the vision model later
       extractedText = "[Image Document - Analyze with AI to extract description]";
       break;
-      
+
     default:
       extractedText = "[Unsupported file format]";
   }
@@ -70,7 +72,8 @@ function detectFileType(file: File): DocType {
   if (type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' || name.endsWith('.xlsx')) return 'xlsx';
   if (type === 'text/csv' || name.endsWith('.csv')) return 'csv';
   if (name.endsWith('.md')) return 'markdown';
+  if (name.endsWith('.txt')) return 'text';
   if (type.startsWith('text/')) return 'text';
-  
+
   return 'unknown';
 }

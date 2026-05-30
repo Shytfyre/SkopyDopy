@@ -8,7 +8,6 @@ import { Onboarding } from './components/Onboarding';
 import { SettingsPanel } from './components/SettingsPanel';
 import { UploadZone } from './components/UploadZone';
 
-
 import { useGPUDetection } from './hooks/useGPUDetection';
 import { useWebLLM } from './hooks/useWebLLM';
 import { useVisionModel } from './hooks/useVisionModel';
@@ -17,7 +16,7 @@ import { useConversations } from './hooks/useConversations';
 import { useStudyTools } from './hooks/useStudyTools';
 import { useRAG } from './hooks/useRAG';
 
-import { getRecommendedModel, TEXT_MODELS } from './lib/model-registry';
+import { getRecommendedModel, resolveModelId, TEXT_MODELS } from './lib/model-registry';
 
 export default function App() {
   const { capabilities, isDetecting } = useGPUDetection();
@@ -29,7 +28,7 @@ export default function App() {
 
   const { isReady: llmReady, isGenerating, progress: llmProgress, currentResponse, error: llmError, initModel, sendMessage } = useWebLLM();
   const { isReady: visionReady, isProcessing: visionProcessing, progress: visionProgress, analyzeImage } = useVisionModel();
-  
+
   const { documents, activeDocumentId, setActiveDocumentId, isUploading, uploadFile, deleteDocument } = useDocuments();
   const { conversations, activeConversationId, setActiveConversationId, activeConversation, createConversation, addMessage, deleteConversation } = useConversations();
   const { search } = useRAG();
@@ -48,19 +47,22 @@ export default function App() {
     setCurrentModelId(selectedModelId);
     setHasOnboarded(true);
     const modelConfig = TEXT_MODELS.find(m => m.id === selectedModelId)!;
-    initModel(selectedModelId, modelConfig.runtime);
+    // Resolve to f32 fallback if GPU doesn't support shader-f16
+    const resolvedId = resolveModelId(modelConfig, capabilities!);
+    initModel(resolvedId, modelConfig.runtime);
   };
 
   const handleModelChange = (modelId: string) => {
     setCurrentModelId(modelId);
     const modelConfig = TEXT_MODELS.find(m => m.id === modelId)!;
-    initModel(modelId, modelConfig.runtime);
+    // Resolve to f32 fallback if GPU doesn't support shader-f16
+    const resolvedId = resolveModelId(modelConfig, capabilities!);
+    initModel(resolvedId, modelConfig.runtime);
   };
 
   const handleSendMessage = async (text: string) => {
     if (!activeConversationId) {
       const conv = await createConversation(currentModelId, text.slice(0, 30));
-      // State updates are async, so we use the conv id directly
       _sendMessageToEngine(text, conv.id);
     } else {
       _sendMessageToEngine(text, activeConversationId);
@@ -68,37 +70,35 @@ export default function App() {
   };
 
   const _sendMessageToEngine = async (text: string, convId: string) => {
-    // Add user message to DB
     await addMessage(convId, 'user', text);
 
     const activeDoc = documents.find(d => d.id === activeDocumentId);
     let systemPrompt = "You are Skopos Study, a helpful, precise, and encouraging AI study assistant.";
-    
-    // RAG Context
+
     if (activeDoc && activeDoc.type !== 'image') {
       const relevantChunks = await search(text, [activeDoc.id]);
+      console.log('RAG chunks:', relevantChunks.length, relevantChunks);
       if (relevantChunks.length > 0) {
-        systemPrompt += "\n\nUse the following excerpts from the user's document to answer the question. If the answer is not in the excerpts, just answer based on your general knowledge but mention that it wasn't in the document.\n\n=== EXCERPTS ===\n";
+        systemPrompt += `\n\nCRITICAL: The excerpts below are from the student's own study material and are the authoritative source of truth for this conversation. You MUST answer based on these excerpts even if the content contradicts general knowledge — the student is studying this specific material, not general facts. Do not substitute your own knowledge. === STUDY MATERIAL EXCERPTS ===\n`;
         relevantChunks.forEach(chunk => {
           systemPrompt += chunk.text + "\n---\n";
         });
+        systemPrompt += "=== END OF EXCERPTS ===\n";
       }
     } else if (activeDoc && activeDoc.type === 'image') {
-       systemPrompt += `\n\nThe user is currently looking at an image document named "${activeDoc.name}".`;
-       if (activeDoc.extractedText && activeDoc.extractedText !== '[Image Document - Analyze with AI to extract description]') {
-          systemPrompt += `\n\nImage AI Analysis: ${activeDoc.extractedText}`;
-       }
+      systemPrompt += `\n\nThe user is currently looking at an image document named "${activeDoc.name}".`;
+      if (activeDoc.extractedText && activeDoc.extractedText !== '[Image Document - Analyze with AI to extract description]') {
+        systemPrompt += `\n\nImage AI Analysis: ${activeDoc.extractedText}`;
+      }
     }
 
-    // We only send the last few messages for context window reasons, plus the new one
     const conv = conversations.find(c => c.id === convId);
     const history = conv ? conv.messages.slice(-6).map(m => ({ role: m.role, content: m.content })) : [];
-    
-    // We add the user message to history manually since it might not be in the state yet
+
     const messages = [
       { role: 'system', content: systemPrompt },
       ...history,
-      { role: 'user', content: text }
+      { role: 'user', content: text },
     ];
 
     try {
@@ -111,15 +111,21 @@ export default function App() {
 
   const activeDoc = documents.find(d => d.id === activeDocumentId) || null;
 
-  if (isDetecting || !capabilities) return <div style={{height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--color-bg-base)'}}>Probing Hardware...</div>;
+  if (isDetecting || !capabilities) {
+    return (
+      <div style={{ height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--color-bg-base)' }}>
+        Probing Hardware...
+      </div>
+    );
+  }
 
   return (
     <div className="app-container">
       {!hasOnboarded && (
-        <Onboarding 
-          capabilities={capabilities} 
-          recommendedModel={getRecommendedModel(capabilities)} 
-          onComplete={handleOnboardingComplete} 
+        <Onboarding
+          capabilities={capabilities}
+          recommendedModel={getRecommendedModel(capabilities)}
+          onComplete={handleOnboardingComplete}
         />
       )}
 
@@ -147,7 +153,7 @@ export default function App() {
       )}
 
       {showSettings && (
-        <SettingsPanel 
+        <SettingsPanel
           onClose={() => setShowSettings(false)}
           capabilities={capabilities}
           currentModelId={currentModelId}
@@ -156,40 +162,42 @@ export default function App() {
       )}
 
       {showUpload && (
-        <UploadZone 
+        <UploadZone
           isUploading={isUploading}
           onUpload={async (f) => {
-            await uploadFile(f);
-            setShowUpload(false);
+            try {
+              await uploadFile(f);
+            } finally {
+              // Always close the overlay, even if upload throws
+              setShowUpload(false);
+            }
           }}
         />
       )}
 
-      <Sidebar 
+      <Sidebar
         conversations={conversations}
         activeConversationId={activeConversationId}
         onSelectConversation={setActiveConversationId}
         onNewConversation={() => setActiveConversationId(null)}
         onDeleteConversation={deleteConversation}
-        
         documents={documents}
         activeDocumentId={activeDocumentId}
         onSelectDocument={setActiveDocumentId}
         onDeleteDocument={deleteDocument}
-        
         onUploadClick={() => setShowUpload(true)}
       />
 
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-        <Header 
+        <Header
           isModelReady={llmReady}
           gpuAdapterName={capabilities?.adapterName || 'CPU'}
           modelName={TEXT_MODELS.find(m => m.id === currentModelId)?.displayName || currentModelId}
           onOpenSettings={() => setShowSettings(true)}
         />
-        
+
         <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-          <ChatPanel 
+          <ChatPanel
             messages={activeConversation?.messages || []}
             isGenerating={isGenerating}
             currentResponse={currentResponse}
@@ -199,36 +207,36 @@ export default function App() {
 
           <div style={{ width: '400px', borderLeft: '1px solid var(--color-border)', display: 'flex', flexDirection: 'column' }}>
             <div style={{ display: 'flex', borderBottom: '1px solid var(--color-border)' }}>
-              <button 
-                className="btn" 
+              <button
+                className="btn"
                 style={{ flex: 1, borderRadius: 0, background: rightPanel === 'document' ? 'var(--color-bg-surface-hover)' : 'transparent', color: rightPanel === 'document' ? 'white' : 'var(--color-text-muted)' }}
                 onClick={() => setRightPanel('document')}
-              >Document View</button>
-              <button 
-                className="btn" 
+              >
+                Document View
+              </button>
+              <button
+                className="btn"
                 style={{ flex: 1, borderRadius: 0, background: rightPanel === 'study' ? 'var(--color-bg-surface-hover)' : 'transparent', color: rightPanel === 'study' ? 'white' : 'var(--color-text-muted)' }}
                 onClick={() => setRightPanel('study')}
-              >Study Tools</button>
+              >
+                Study Tools
+              </button>
             </div>
 
             <div style={{ flex: 1, overflow: 'hidden' }}>
               {rightPanel === 'document' ? (
-                <DocumentViewer 
-                  document={activeDoc} 
+                <DocumentViewer
+                  document={activeDoc}
                   isAnalyzingImage={visionProcessing}
                   onAnalyzeImage={async (url) => {
-                    // For v1, we fake the url or create objectURL if we had blob.
-                    // Assuming we pass the activeDoc.id instead
                     if (activeDoc?.type === 'image') {
-                       // We can't actually do this easily without the blob. But for the sake of completion:
-                       const res = await analyzeImage('https://images.unsplash.com/photo-1543286386-2e659306cd6c?w=400'); // Fake image since we don't store blob easily
-                       // Update doc in DB with analysis
-                       console.log(res);
+                      const res = await analyzeImage('https://images.unsplash.com/photo-1543286386-2e659306cd6c?w=400');
+                      console.log(res);
                     }
                   }}
                 />
               ) : (
-                <StudyTools 
+                <StudyTools
                   isGenerating={studyTools.isGenerating}
                   onGenerateFlashcards={() => studyTools.generateFlashcards(activeDoc?.extractedText || 'No text')}
                   onGenerateQuiz={() => studyTools.generateQuiz(activeDoc?.extractedText || 'No text')}

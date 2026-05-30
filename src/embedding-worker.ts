@@ -6,12 +6,20 @@ env.useBrowserCache = true;
 
 class EmbeddingPipeline {
   static task = 'feature-extraction' as const;
-  static model = 'Xenova/all-MiniLM-L6-v2';
+  static model = 'Xenova/paraphrase-multilingual-MiniLM-L12-v2';
   static instance: any = null;
 
   static async getInstance(progress_callback?: Function) {
     if (this.instance === null) {
-      this.instance = pipeline(this.task, this.model, { progress_callback: progress_callback as any });
+      this.instance = await pipeline(this.task, this.model, {
+        progress_callback: progress_callback as any
+      }).catch(async (e) => {
+        console.warn('WebGPU embedding init failed, falling back to WASM:', e);
+        return await pipeline(this.task, this.model, {
+          device: 'wasm',
+          progress_callback: progress_callback as any
+        });
+      });
     }
     return this.instance;
   }
